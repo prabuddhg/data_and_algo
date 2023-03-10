@@ -1,4 +1,5 @@
-CLUSTER = {"1": 25000, "2": 26000, "3": 27000}
+CLUSTER = {"1": 25001, "2": 26001, "3": 27001}
+#CLUSTER = {"1": 25001, "2": 26001}
 
 
 def get_port_number(server_number):

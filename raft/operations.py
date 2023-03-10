@@ -4,6 +4,7 @@ import logging
 
 logging = logging.getLogger(__name__)
 
+
 @lru_cache
 def get_db():
     db_obj = db.KeysDB()
@@ -44,9 +45,11 @@ operation_dict = {
 }
 
 
-
 def execute(input):
     command, key, value = None, None, None
+    if ':' not in input:
+        logging.info("Non execution statement {input}")
+        return False
     if "get" in input:
         command, key = input.split(":")
     else:
