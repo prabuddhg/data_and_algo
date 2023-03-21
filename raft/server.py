@@ -8,10 +8,8 @@ import constants as const
 import socket
 import logging
 from logging.config import fileConfig
-import time
-from tenacity import retry, \
-    retry_if_exception_type, \
-    stop_after_attempt, wait_fixed
+import term
+import state_machine as sm
 
 fileConfig("logging_config.ini", disable_existing_loggers=False)
 logging = logging.getLogger(__name__)
@@ -19,6 +17,8 @@ logging = logging.getLogger(__name__)
 lock = Lock()
 messages = Queue()
 subscribers = set()
+
+# https://stackoverflow.com/questions/62637871/using-delimiters-in-a-python-tcp-stream
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -31,10 +31,15 @@ def get_args():
 
 
 class RaftNode:
-    def __init__(self, port_number, ip_address="127.0.0.1", peers=None):
+    def __init__(self, port_number, ip_address="127.0.0.1", peers=None, server_number=1):
         self.port_number = port_number
         self.ip_address = ip_address
         self.peers = peers
+        self.term = term.Term(port_number)
+        self.member_status = 'initial' # initial, follower, candidate, leader
+        self.role = sm.RaftState(self.member_status)
+        self.leader_id = None
+        self.id = server_number
 
     async def dispatcher(self):
         while True:
@@ -49,7 +54,9 @@ class RaftNode:
             try:
                 conn_peer = await open_connection(self.ip_address, peer)
                 logging.info(f"Preparing to add peer server-{peer} in cluster")
-                peer_message = f"server-{self.port_number}"
+                # import pdb;pdb.set_trace()
+                peer_message = self.role.construct_send_message_based_on_current_state(self)
+                # peer_message = f"server-{self.port_number}"
                 await conn_peer.sendall(peer_message.encode("utf-8"))
                 flag = False
             except Exception as e:
@@ -80,7 +87,9 @@ class RaftNode:
                     peer = int(name.split('server-')[1])
                     conn_peer = await open_connection(self.ip_address, peer)
                     await sleep(2)
-                    await conn_peer.sendall(msg.encode("utf-8"))
+                    peer_message = self.role.construct_ack_message_based_on_current_state(self)
+                    # await conn_peer.sendall(msg.encode("utf-8"))
+                    await conn_peer.sendall(peer_message.encode("utf-8"))
         finally:
             subscribers.discard(queue)
 
@@ -111,24 +120,26 @@ class RaftNode:
         logging.info(f"Started TCP server at {self.port_number}")
         async with client:
             client_stream = client.as_stream()
-            while True:
-
-                data = await client_stream.read(100000)
-                if not data:
-                    continue
+            # while True:
+            data = await client_stream.read(100000)
+            #if not data:
+            #    continue
+            decoded_line = data.decode("utf-8").strip()
+            if ':' in decoded_line:
                 decoded_line = data.decode("utf-8").strip()
-                if ':' in decoded_line:
-                    decoded_line = data.decode("utf-8").strip()
-                    logging.info(f" Replication in progress for data:{decoded_line} .. ")
-                    ret_msg = msg.process(decoded_line, self.port_number)
-                    # Step 1: use this flag to say all caught up
-                else:
-                    logging.info(f"Received request from peer {data} to join cluster")
-                name = data.decode('utf-8')
-                async with TaskGroup(wait=all) as workers:
-                    await workers.spawn(self.outgoing, client, name)
-                    await workers.spawn(self.incoming, client_stream, name)
-                    await workers.spawn(self.peer_recovery_server, client_stream, name)
+                logging.info(f"Replication in progress for data:{decoded_line} .. ")
+                ret_msg = msg.process(decoded_line, self.port_number)
+                if not ret_msg:
+                    logging.info(f" Sync compete for :{decoded_line} .. ")
+                # Step 1: use this flag to say all caught up
+                # peer_message = self.role.construct_message_based_on_current_state(self)
+            else:
+                logging.info(f"Received request from peer {data} to join cluster")
+            name = data.decode('utf-8')
+            async with TaskGroup(wait=all) as workers:
+                await workers.spawn(self.outgoing, client, name)
+                await workers.spawn(self.incoming, client_stream, name)
+                # await workers.spawn(self.peer_recovery_server, client_stream, name)
 
                 # await publish((name, b"has gone away\n"))
 
@@ -137,7 +148,7 @@ class RaftNode:
     async def chat_server(
         self,
     ):
-        msg.recover(self.port_number)
+        #msg.recover(self.port_number)
         async with TaskGroup() as g:
             result_tcp = await g.spawn(
                 tcp_server, self.ip_address, self.port_number, self.chat_handler,
@@ -146,15 +157,19 @@ class RaftNode:
             # dependency here result_tcp is needed for connect_peers
             await g.spawn(self.connect_peers, self.peers[0], result_tcp)
             await g.spawn(self.connect_peers, self.peers[1], result_tcp)
+            await g.spawn(self.role.iterate_state_machine())
 
 
 if __name__ == "__main__":
     args = get_args()
     port_number, peers = const.get_port_number(args.server)
     hostname = socket.gethostname()
-    ip_address = socket.gethostbyname(hostname)
+    try:
+        ip_address = socket.gethostbyname(hostname)
+    except Exception as e:
+        ip_address = '127.0.0.1'
     logging.info(
         f"Starting raft node {args.server} for ip {ip_address} on port {port_number} with peers {peers}"
     )
-    raft_node = RaftNode(port_number, ip_address, peers)
-    run(raft_node.chat_server())
+    raft_node = RaftNode(port_number, ip_address, peers, args.server)
+    run(raft_node.chat_server(), with_monitor=True)

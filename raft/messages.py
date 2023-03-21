@@ -3,7 +3,9 @@ import operations as op
 from functools import lru_cache
 import logging
 
+cache = []
 logging = logging.getLogger(__name__)
+
 
 
 @lru_cache
@@ -24,25 +26,27 @@ def save(input, server_number):
 
 
 def process(input, server_number):
-    cache = []
+    global cache
     if input.strip() not in cache:
         cache.append(input.strip())
         save(input, server_number)
         return op.execute(input)
     else:
         logging.info(f"Skipping {input.strip()}")
-        return
+        return False
 
 
 
 def recover(server_number):
+    global cache
     with open(get_file(server_number), "r") as ks:
         file_line = ks.readline()
         while file_line:
             logging.info(f"Processing {file_line.strip()}")
             if "set" in file_line or "del" in file_line:
                 logging.info(f"Recovering {file_line.strip()}")
-                op.execute(file_line)
+                if file_line.strip() not in cache:
+                    op.execute(file_line)
             else:
                 logging.info(f"Skipping {file_line.strip()}")
             # use realine() to read next line

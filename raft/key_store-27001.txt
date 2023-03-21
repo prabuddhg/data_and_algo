@@ -1,2 +1,9 @@
 set:c:3
-get:c
+set:b:2
+set:a:1
+set:b:2
+set:a:1
+set:c:3
+set:b:2
+set:a:1
+set:c:3
