@@ -7,6 +7,7 @@ import logging
 import random
 import append_entries as ae
 import curio
+import term
 
 STATE_MACHINE = {
     'initial': {
@@ -18,7 +19,7 @@ STATE_MACHINE = {
         'timeout_f': 'candidate'  # next state
     },
     'candidate': {
-        'condition': ['timeout_c'],  # , 'majority', 'new_term', 'current_leader'],
+        'condition': ['timeout_c', 'majority'],  # , 'majority', 'new_term', 'current_leader'],
         'timeout_c': 'leader',  # next state
         'majority': 'leader',  # next state
         'new_term': 'follower',  # next state
@@ -37,8 +38,12 @@ logging = logging.getLogger()
 
 class RaftState():
 
-    def __init__(self, state='initial'):
+    def __init__(self, state='initial', port_number='25001'):
         self._current_state = state
+        self.heart_beat = True # True means heart beat received from peers, False is reverse
+        self.prepare_for_election = False
+        self.majority_status = False
+        self.term = term.Term(port_number)
 
     async def startup(self, timeout=5):
         logging.info("Inside timeout: startup")
@@ -48,16 +53,31 @@ class RaftState():
     async def timeout_f(self, timeout=5):
         logging.info("Inside timeout: follower")
         await curio.sleep(5)
-        return 'candidate'
+        if not self.heart_beat:
+            return 'candidate'
+        else:
+            await self.timeout_f()
 
-    async def timeout_c(self, timeout=5):
+    async def majority(self, timeout=5):
+        logging.info("Inside majority: leader")
+        await curio.sleep(5)
+        if self.majority:
+            return 'leader'
+        # else:
+        #    await self.timeout_l()
+
+    async def timeout_c(self, timeout=10):
         logging.info("Inside timeout: candidate")
         await curio.sleep(5)
-        return 'leader'
+        if self.majority:
+            return 'leader'
+        else:
+            await self.timeout_c()
+
 
     async def timeout_l(self, timeout=5):
         logging.info("Inside timeout: leader")
-        await curio.sleep(5)
+        await curio.sleep(20)
         return 'follower'
 
     async def iterate_state_machine(self):
@@ -77,7 +97,7 @@ class RaftState():
         async with curio.TaskGroup(wait=any) as g:
             for i in current_state_condition_list:
                 method_i = getattr(self, i)
-                logging.info(f"Spawning {method_i}")
+                logging.info(f"Spawning {i}")
                 await g.spawn(method_i())
         next_condition = g.result
         # next_condition = random.choice(current_state_condition_list)
@@ -152,6 +172,9 @@ class RaftState():
         method_for_message = getattr(self, current_state)
         message_details = method_for_message()
         return ae.get_append_entry_args_list(*[0,0,0,0])
+
+    def digest_message(self):
+        pass
 
 
 if __name__ == "__main__":

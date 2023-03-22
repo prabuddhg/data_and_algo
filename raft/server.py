@@ -8,7 +8,6 @@ import constants as const
 import socket
 import logging
 from logging.config import fileConfig
-import term
 import state_machine as sm
 
 fileConfig("logging_config.ini", disable_existing_loggers=False)
@@ -35,9 +34,8 @@ class RaftNode:
         self.port_number = port_number
         self.ip_address = ip_address
         self.peers = peers
-        self.term = term.Term(port_number)
         self.member_status = 'initial' # initial, follower, candidate, leader
-        self.role = sm.RaftState(self.member_status)
+        self.role = sm.RaftState(self.member_status, port_number)
         self.leader_id = None
         self.id = server_number
 
@@ -52,22 +50,24 @@ class RaftNode:
         logging.info(f"Connecting with peer server-{peer} in cluster")
         while flag:
             try:
+                # Send mesaage in HAPPY PATH
                 conn_peer = await open_connection(self.ip_address, peer)
-                logging.info(f"Preparing to add peer server-{peer} in cluster")
+                # logging.info(f"Preparing to add peer server-{peer} in cluster")
+                logging.info(f"Received heart-beat from server-{peer}")
+                self.role.heart_beat = True
                 # import pdb;pdb.set_trace()
                 peer_message = self.role.construct_send_message_based_on_current_state(self)
                 # peer_message = f"server-{self.port_number}"
                 await conn_peer.sendall(peer_message.encode("utf-8"))
-                flag = False
+                # flag = False
             except Exception as e:
+                # Send mesaage in SAD PATH
                 logging.warning(e)
                 await sleep(5)
-                logging.info(f"Retrying to add peer server-{peer} in cluster")
-        logging.info(f"Added peer server-{peer} added in cluster")
-        # finish this task and exit
-
-        # do it here
-        return True
+                logging.info(f"No heart-beat received from server-{peer}")
+                self.role.heart_beat = False
+                logging.info(f"Waiting to receive heart-beat from server-{peer}")
+        # logging.info(f"Added peer server-{peer} added in cluster")
 
 
     # Publisher
