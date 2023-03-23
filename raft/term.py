@@ -11,6 +11,10 @@ class Term():
         self.server_number = server_number
         self._term = 0
         self.set_term()
+        self.key_file = os.path.join(curr_dir, f"term-{self.server_number}.txt")
+
+    def get_latest_term_tuple(self):
+        raise RuntimeError("Not Implemented")
 
     def get_term(self):
         with open(self.get_file(), "r") as ks:

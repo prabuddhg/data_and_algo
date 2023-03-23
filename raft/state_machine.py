@@ -15,8 +15,8 @@ STATE_MACHINE = {
         'startup': 'follower'  # next state
     },
     'follower': {
-        'condition': ['timeout_f'],
-        'timeout_f': 'candidate'  # next state
+        'condition': ['election_timer'],
+        'election_timer': 'candidate'  # next state
     },
     'candidate': {
         'condition': ['timeout_c', 'majority'],  # , 'majority', 'new_term', 'current_leader'],
@@ -26,11 +26,8 @@ STATE_MACHINE = {
         'current_leader': 'follower'  # next state
     },
     'leader': {
-        'condition': ['timeout_l'],  # ['discover_server_with_higher_term', 'crash', 'no_change'],
+        'condition': ['discover_server_with_higher_term'],  # ['discover_server_with_higher_term', 'crash', 'no_change'],
         'discover_server_with_higher_term': 'follower',  # next state
-        'crash': 'follower',  # next state
-        'no_change': 'leader', # next state
-        'timeout_l': 'follower'
     }
 }
 
@@ -42,43 +39,56 @@ class RaftState():
         self._current_state = state
         self.heart_beat = True # True means heart beat received from peers, False is reverse
         self.prepare_for_election = False
-        self.majority_status = False
-        self.term = term.Term(port_number)
+        self.majority_status = 0
+        self.port_number = port_number
+        self.discover_server_with_higher_term_status = False
+        self.term = term.Term(self.port_number)
+        self.name = f"Server-{self.port_number}: "
 
     async def startup(self, timeout=5):
-        logging.info("Inside timeout: startup")
+        logging.info(f"{self.name} is startup")
         await curio.sleep(0)
         return 'follower'
 
-    async def timeout_f(self, timeout=5):
-        logging.info("Inside timeout: follower")
+    async def election_timer(self, timeout=5):
+        logging.info(f"{self.name} is follower")
         await curio.sleep(5)
         if not self.heart_beat:
+            logging.info(f"{self.name} Election timer expired, prepare for candidacy!!!")
+            self.prepare_for_election = True
             return 'candidate'
         else:
             await self.timeout_f()
 
     async def majority(self, timeout=5):
-        logging.info("Inside majority: leader")
+        logging.info(f"{self.name} checking for majority")
         await curio.sleep(5)
-        if self.majority:
+        if self.majority_status > 1:
+            logging.info(f"{self.name} Won the election, now leader")
             return 'leader'
         # else:
         #    await self.timeout_l()
 
     async def timeout_c(self, timeout=10):
-        logging.info("Inside timeout: candidate")
+        logging.info(f"{self.name} No response, may be peers are offline, lets become leader")
         await curio.sleep(5)
-        if self.majority:
+        if not self.heart_beat:
             return 'leader'
         else:
             await self.timeout_c()
 
 
-    async def timeout_l(self, timeout=5):
-        logging.info("Inside timeout: leader")
-        await curio.sleep(20)
-        return 'follower'
+    async def discover_server_with_higher_term(self, timeout=5):
+        logging.info(f"{self.name} checking for another server with higher term")
+        await curio.sleep(5)
+        if self.discover_server_with_higher_term_status:
+            return 'follower'
+        else:
+            if self._current_state == 'leader':
+                logging.info(f"{self.name} Still Leader!!!")
+            else:
+                raise RuntimeError("Something not right, please check")
+            await self.discover_server_with_higher_term()
 
     async def iterate_state_machine(self):
         while True:
@@ -115,7 +125,10 @@ class RaftState():
         #     'prev_log_term',  # int		// important metadata for log correctness
         #     'leader_commit'   # int 	    // what index have been received by the majority
         time.sleep(2)
-        term = 0
+        latest_term_tuple = self.term.get_latest_term_tuple()
+        # latest_term_tuple will help us extract term, leader_id, prev_log_index, prev_log_term
+        logging.info(f"{self.name} current term={current_term_tuple}")
+        term = current_term
         leader_id = 0
         entries = []
         prev_log_index = 0
