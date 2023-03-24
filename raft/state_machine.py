@@ -35,7 +35,7 @@ logging = logging.getLogger()
 
 class RaftState():
 
-    def __init__(self, state='initial', port_number='25001'):
+    def __init__(self, state='initial', port_number='25001', server_number=1, io_queue=None):
         self._current_state = state
         self.heart_beat = True # True means heart beat received from peers, False is reverse
         self.prepare_for_election = False
@@ -44,6 +44,8 @@ class RaftState():
         self.discover_server_with_higher_term_status = False
         self.term = term.Term(self.port_number)
         self.name = f"Server-{self.port_number}: "
+        self.id = server_number
+        self.io_queue = io_queue
 
     async def startup(self, timeout=5):
         logging.info(f"{self.name} is startup")
@@ -52,17 +54,17 @@ class RaftState():
 
     async def election_timer(self, timeout=5):
         logging.info(f"{self.name} is follower")
-        await curio.sleep(5)
+        await curio.sleep(10)
         if not self.heart_beat:
             logging.info(f"{self.name} Election timer expired, prepare for candidacy!!!")
             self.prepare_for_election = True
             return 'candidate'
         else:
-            await self.timeout_f()
+            await self.election_timer()
 
     async def majority(self, timeout=5):
         logging.info(f"{self.name} checking for majority")
-        await curio.sleep(5)
+        await curio.sleep(10)
         if self.majority_status > 1:
             logging.info(f"{self.name} Won the election, now leader")
             return 'leader'
@@ -71,7 +73,7 @@ class RaftState():
 
     async def timeout_c(self, timeout=10):
         logging.info(f"{self.name} No response, may be peers are offline, lets become leader")
-        await curio.sleep(5)
+        await curio.sleep(10)
         if not self.heart_beat:
             return 'leader'
         else:
@@ -80,7 +82,7 @@ class RaftState():
 
     async def discover_server_with_higher_term(self, timeout=5):
         logging.info(f"{self.name} checking for another server with higher term")
-        await curio.sleep(5)
+        await curio.sleep(10)
         if self.discover_server_with_higher_term_status:
             return 'follower'
         else:
@@ -112,7 +114,6 @@ class RaftState():
         next_condition = g.result
         # next_condition = random.choice(current_state_condition_list)
         logging.info(f"found next condition! {next_condition}")
-        time.sleep(2)
         return next_condition
 
     def follower(self):
@@ -124,34 +125,14 @@ class RaftState():
         #     'prev_log_index', # int		// important metadata for log correctness
         #     'prev_log_term',  # int		// important metadata for log correctness
         #     'leader_commit'   # int 	    // what index have been received by the majority
-        time.sleep(2)
         latest_term_tuple = self.term.get_latest_term_tuple()
+        if latest_term_tuple in ['', None, 0]:
+            #      [term, leader_id, entries, prev_log_index, prev_log_term]
+            logging.info(f"{self.name} current term=0,0,[],0,0")
+            return [self.term._term, 0, [], 0, 0]
+        logging.info(f"{self.name} current term={latest_term_tuple}")
         # latest_term_tuple will help us extract term, leader_id, prev_log_index, prev_log_term
-        logging.info(f"{self.name} current term={current_term_tuple}")
-        term = current_term
-        leader_id = 0
-        entries = []
-        prev_log_index = 0
-        prev_log_term = 0
-        leader_commit = 0
-        return [term, leader_id, entries, prev_log_index, prev_log_term]
-
-    def leader(self):
-        logging.info("running as -> leader")
-        # Construct message if you are leader
-        #     'term',           # int		// current term of the leader, very IMPORTANT
-        #     'leader_id',      # int		// id of the leader, 0 to N-1 where N = total servers
-        #     'entries',        # [] Entry  // new data to sync
-        #     'prev_log_index', # int		// important metadata for log correctness
-        #     'prev_log_term',  # int		// important metadata for log correctness
-        #     'leader_commit'   # int 	    // what index have been received by the majority
-        time.sleep(2)
-        term = 0
-        leader_id = 0
-        entries = []
-        prev_log_index = 0
-        prev_log_term = 0
-        leader_commit = 0
+        term, leader_id, entries, prev_log_index, prev_log_term = latest_term_tuple.split(',')
         return [term, leader_id, entries, prev_log_index, prev_log_term]
 
     def candidate(self):
@@ -163,7 +144,22 @@ class RaftState():
         #     'prev_log_index', # int		// important metadata for log correctness
         #     'prev_log_term',  # int		// important metadata for log correctness
         #     'leader_commit'   # int 	    // what index have been received by the majority
-        time.sleep(2)
+        term = self.term._term + 1
+        leader_id = self.id
+        prev_log_index = 0
+        prev_log_term = 0
+        leader_commit = 0
+        return [term, leader_id, prev_log_index, prev_log_term]
+
+    def leader(self):
+        logging.info("running as -> leader")
+        # Construct message if you are leader
+        #     'term',           # int		// current term of the leader, very IMPORTANT
+        #     'leader_id',      # int		// id of the leader, 0 to N-1 where N = total servers
+        #     'entries',        # [] Entry  // new data to sync
+        #     'prev_log_index', # int		// important metadata for log correctness
+        #     'prev_log_term',  # int		// important metadata for log correctness
+        #     'leader_commit'   # int 	    // what index have been received by the majority
         term = 0
         leader_id = 0
         entries = []
@@ -171,6 +167,8 @@ class RaftState():
         prev_log_term = 0
         leader_commit = 0
         return [term, leader_id, entries, prev_log_index, prev_log_term]
+
+
 
     def construct_send_message_based_on_current_state(self, server_obj=None):
         current_state = getattr(server_obj.role, '_current_state')
@@ -186,7 +184,18 @@ class RaftState():
         message_details = method_for_message()
         return ae.get_append_entry_args_list(*[0,0,0,0])
 
-    def digest_message(self):
+    def digest_message(self, input_message=None):
+        input_message
+        # do something
+        # with it like understand do we
+        # have to respond to something
+        # or send something
+        ack = False
+        if not input_message:
+            output_digest_message = self.construct_ack_message_based_on_current_state(self)
+        if not ack:
+            output_digest_message = self.construct_ack_message_based_on_current_state()
+        return output_digest_message
         pass
 
 
