@@ -8,6 +8,9 @@ import random
 import append_entries as ae
 import curio
 import term
+from logging.config import fileConfig
+
+fileConfig("logging_config.ini", disable_existing_loggers=False)
 
 STATE_MACHINE = {
     'initial': {
@@ -102,7 +105,10 @@ class RaftState():
             # import pdb;pdb.set_trace()
             # self._current_state = STATE_MACHINE[current_state][next_condition]
             self._current_state = next_state
-            next_state = getattr(self, self._current_state)
+            try:
+                next_state = getattr(self, self._current_state)
+            except Exception as e:
+                import pdb;pdb.set_trace()
             next_state()
 
     async def find_conditions(self, current_state_condition_list):
@@ -125,11 +131,13 @@ class RaftState():
         #     'prev_log_index', # int		// important metadata for log correctness
         #     'prev_log_term',  # int		// important metadata for log correctness
         #     'leader_commit'   # int 	    // what index have been received by the majority
+        #     'server-id'       # int       // for debugging :-)
         latest_term_tuple = self.term.get_latest_term_tuple()
         if latest_term_tuple in ['', None, 0]:
             #      [term, leader_id, entries, prev_log_index, prev_log_term]
             logging.info(f"{self.name} current term=0,0,[],0,0")
-            return [self.term._term, 0, [], 0, 0]
+            return [self.term._term, 0, [], 0, 0, self.id]
+        latest_term_tuple.append(self.id)
         logging.info(f"{self.name} current term={latest_term_tuple}")
         # latest_term_tuple will help us extract term, leader_id, prev_log_index, prev_log_term
         term, leader_id, entries, prev_log_index, prev_log_term = latest_term_tuple.split(',')
@@ -170,33 +178,30 @@ class RaftState():
 
 
 
-    def construct_send_message_based_on_current_state(self, server_obj=None):
-        current_state = getattr(server_obj.role, '_current_state')
+    def construct_send_message_based_on_current_state(self):
+        current_state = getattr(self, '_current_state')
         logging.info(f"Constructing send message based on my role {current_state}")
         method_for_message = getattr(self, current_state)
         message_details = method_for_message()
-        return ae.get_append_entry_args_list(*message_details)
+        append_entry_message = ae.get_append_entry_args_list(*message_details)
+        logging.info(f"ready to send append_message {append_entry_message}")
+        return append_entry_message
 
-    def construct_ack_message_based_on_current_state(self, server_obj=None):
-        current_state = getattr(server_obj.role, '_current_state')
+    def construct_ack_message_based_on_current_state(self):
+        current_state = getattr(self, '_current_state')
         logging.info(f"Constructing response message based on my role {current_state}")
         method_for_message = getattr(self, current_state)
         message_details = method_for_message()
-        return ae.get_append_entry_args_list(*[0,0,0,0])
+        ack_message = ae.get_append_entry_args_list(*message_details)
+        logging.info(f"ready to send ack_message {ack_message}")
+        return ack_message
 
-    def digest_message(self, input_message=None):
-        input_message
-        # do something
-        # with it like understand do we
-        # have to respond to something
-        # or send something
-        ack = False
-        if not input_message:
-            output_digest_message = self.construct_ack_message_based_on_current_state(self)
+    def digest_message(self, ack=False):
         if not ack:
             output_digest_message = self.construct_ack_message_based_on_current_state()
+        if ack:
+            output_digest_message = self.construct_ack_message_based_on_current_state()
         return output_digest_message
-        pass
 
 
 if __name__ == "__main__":
