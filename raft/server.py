@@ -15,6 +15,7 @@ lock = Lock()
 messages = Queue()
 subscribers = set()
 
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -56,20 +57,20 @@ class RaftNode:
                 conn_peer = await open_connection(self.ip_address, peer)
                 logging.info(f"Received heart-beat from server-{peer}")
                 self.role.heart_beat = True
-                ack = False
+                initial = False
                 if self.member_status in ['follower']:
-                    ack = True
-                peer_message = self.role.digest_message(ack)
+                    initial = True
+                logging.info(f"Preparing to send heart-beat to server-{peer}")
+                peer_message = self.role.digest_message(initial=initial)
+                logging.info(f"Preparing to send {peer_message} heart-beat to server-{peer}")
                 await conn_peer.sendall(peer_message.encode("utf-8"))
                 flag = False
             except Exception as e:
                 # Send mesaage in SAD PATH
-                logging.warning(e)
-                await sleep(5)
+                await sleep(1)
                 logging.info(f"No heart-beat received from server-{peer}")
                 self.role.heart_beat = False
                 logging.info(f"Waiting to receive heart-beat from server-{peer}")
-
 
     # Publisher
     async def publish(self, msg):
@@ -91,18 +92,16 @@ class RaftNode:
                 name, msg = await queue.get()
                 output = msg.encode("utf-8")
                 logging.info(f"Sending {output} to {name}")
-                peer = int(name.split('server-')[1]) - 1
+                peer = int(name.split('server-')[1])
+                peer_port_number = const.CLUSTER[str(peer)]
                 # await client.sendall(output)
-                await self.heart_beat(self.peers[peer], msg)
+                await self.heart_beat(peer_port_number, msg)
         finally:
             subscribers.discard(queue)
-
-
 
     async def incoming(self, client, input_data):
         """
         task that reads chat messages and publishes them
-        :param client_stream:
         :param input_data:
         :return:
         """
@@ -110,18 +109,18 @@ class RaftNode:
         # decoded_line = line.decode("utf-8").strip()
         logging.info(f"Received message {input_data} from name")
         # import os;os._exit(1)
-        # import pdb;pdb.set_trace()
         if input_data not in ['']:
             decoded_data = input_data.strip()
             name = 'server-' + decoded_data.split(',')[-1]
             logging.info(f"Need to digest message {decoded_data} from {name}")
-            return_data = self.role.digest_message(input_data)
-            logging.info(f"Message digested, prepare to send {decoded_data} to {name}")
-            await sleep(10)
+            decoded_data = decoded_data.split(',')
+            return_data = self.role.digest_message(message=decoded_data)
+            if not return_data:
+                import pdb;pdb.set_trace()
+            logging.info(f"Message digested, prepare to send {return_data} to {name}")
             await self.publish((name, return_data))
 
     async def chat_handler(self, client, addr):
-        logging.info(f"Started TCP server at {self.port_number}")
         async with client:
             client_stream = client.as_stream()
             # while True:
@@ -133,9 +132,10 @@ class RaftNode:
         logging.info("Connection closed")
 
     async def chat_server(
-        self,
+            self,
     ):
         # msg.recover(self.port_number)
+        logging.info(f"Started TCP server at {self.port_number}")
         async with TaskGroup() as g:
             result_tcp = await g.spawn(
                 tcp_server, self.ip_address, self.port_number, self.chat_handler,
